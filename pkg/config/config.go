@@ -7,10 +7,6 @@ import (
 	"fmt"
 	"os"
 
-	"charm.land/bubbles/v2/key"
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/sqlite3"
-	"github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/kkyr/fig"
 	"github.com/spf13/cobra"
 
@@ -76,16 +72,20 @@ type Profile struct {
 }
 
 type KeyBindings struct {
-	NextTab         string `fig:"next-tab"      default:"tab"`
-	PrevTab         string `fig:"prev-tab"      default:"shift+tab"`
-	PageTop         string `fig:"page-top"      default:"g"`
-	PageBottom      string `fig:"page-bottom"   default:"G"`
-	EndOfLine       string `fig:"end-of-line"   default:"$"`
-	BeginningOfLine string `fig:"beginning-of-line"   default:"0"`
-	Help            string `fig:"help"   default:"?"`
-	Quit            string `fig:"quit"   default:"ctrl+c"`
-	Navigation      NavigationBindgins
-	Editor          EditorKeyMap
+	Help       string `fig:"help" default:"?"`
+	Quit       string `fig:"quit" default:"ctrl+c"`
+	History    string `fig:"history" default:"alt+h"`
+	Navigation NavigationBindgins
+	Editor     EditorKeyMap
+	Sidebar    SidebarKeyMap
+	ResultSet  ResultSetKeyMap
+}
+
+type NavigationBindgins struct {
+	Up    string `fig:"up" default:"ctrl+k"`
+	Down  string `fig:"down" default:"ctrl+j"`
+	Left  string `fig:"left" default:"ctrl+h"`
+	Right string `fig:"right" default:"ctrl+l"`
 }
 
 type EditorKeyMap struct {
@@ -94,6 +94,12 @@ type EditorKeyMap struct {
 	Down  string `fig:"down" default:"j"`
 	Left  string `fig:"left" default:"h"`
 	Right string `fig:"right" default:"l"`
+
+	// Internal Navigation.
+	LineStart  string `fig:"line-start" default:"0"`
+	LineEnd    string `fig:"line-end" default:"$"`
+	GoToTop    string `fig:"go-top" default:"g"`
+	GoToBottom string `fig:"go-bottom" default:"G"`
 
 	// Mode Switching.
 	Insert string `fig:"insert" default:"i"`
@@ -104,11 +110,18 @@ type EditorKeyMap struct {
 	ExecuteSingleQuery string `fig:"execute-single-query" default:"ctrl+r"`
 }
 
-type NavigationBindgins struct {
-	Up    string `fig:"up"    default:"ctrl+k"`
-	Down  string `fig:"down"  default:"ctrl+j"`
-	Left  string `fig:"left"  default:"ctrl+h"`
-	Right string `fig:"right" default:"ctrl+l"`
+type SidebarKeyMap struct {
+	GoToTop    string `fig:"go-top" default:"alt+k"`
+	GoToBottom string `fig:"go-bottom" default:"alt+j"`
+}
+
+type ResultSetKeyMap struct {
+	NextTab    string `fig:"next-tab" default:"tab"`
+	PrevTab    string `fig:"prev-tab" default:"shift+tab"`
+	LineEnd    string `fig:"line-end" default:"$"`
+	LineStart  string `fig:"line-start" default:"0"`
+	GoToTop    string `fig:"go-top" default:"g"`
+	GoToBottom string `fig:"go-bottom" default:"G"`
 }
 
 // New returns a config instance the with db connection data inplace based on the flags of a cobra command.
@@ -192,52 +205,26 @@ func Init(configName string) (command.Options, error) {
 	return opts, nil
 }
 
-func SetupKeyMap() (*command.TUIKeyMap, error) {
+// GetKeyMap reads the keybindings field from the config file and populates
+// the KeyMapConfig struct and returns the result.
+func GetKeyMap() (KeyMapConfig, error) {
 	var kbc KeyMapConfig
-	var tkb command.TUIKeyMap
 
 	configDir, err := os.UserConfigDir()
 	if err != nil {
-		return nil, err
+		return kbc, err
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, err
+		return kbc, err
 	}
 
 	if err := fig.Load(&kbc, fig.File(".dblab.yaml"), fig.Dirs(".", home, configDir)); err != nil {
-		return nil, err
+		return kbc, err
 	}
 
-	tkb = command.TUIKeyMap{
-		NextTab:         key.NewBinding(key.WithKeys(kbc.KeyBindings.NextTab), key.WithHelp(kbc.KeyBindings.NextTab, "next tab (result set view)")),
-		PrevTab:         key.NewBinding(key.WithKeys(kbc.KeyBindings.PrevTab), key.WithHelp(kbc.KeyBindings.PrevTab, "previous tab (result set view)")),
-		PageTop:         key.NewBinding(key.WithKeys(kbc.KeyBindings.PageTop), key.WithHelp(kbc.KeyBindings.PageTop, "go to top (sidebar database graph)")),
-		PageBottom:      key.NewBinding(key.WithKeys(kbc.KeyBindings.PageBottom), key.WithHelp(kbc.KeyBindings.PageBottom, "go to bottom (sidebar database graph)")),
-		EndOfLine:       key.NewBinding(key.WithKeys(kbc.KeyBindings.EndOfLine), key.WithHelp(kbc.KeyBindings.EndOfLine, "navigate all the way to the right of the table")),
-		BeginningOfLine: key.NewBinding(key.WithKeys(kbc.KeyBindings.BeginningOfLine), key.WithHelp(kbc.KeyBindings.BeginningOfLine, "navigate all the way to the left of the table")),
-		Help:            key.NewBinding(key.WithKeys(kbc.KeyBindings.Help), key.WithHelp(kbc.KeyBindings.Help, "toggle help")),
-		Quit:            key.NewBinding(key.WithKeys(kbc.KeyBindings.Quit), key.WithHelp(kbc.KeyBindings.Quit, "quit")),
-		Navigation: command.TUINavigationKeyMap{
-			Up:    key.NewBinding(key.WithKeys(kbc.KeyBindings.Navigation.Up), key.WithHelp(kbc.KeyBindings.Navigation.Up, "Toggle to the panel above")),
-			Down:  key.NewBinding(key.WithKeys(kbc.KeyBindings.Navigation.Down), key.WithHelp(kbc.KeyBindings.Navigation.Down, "Toggle to the panel below")),
-			Left:  key.NewBinding(key.WithKeys(kbc.KeyBindings.Navigation.Left), key.WithHelp(kbc.KeyBindings.Navigation.Left, "Toggle to the panel on the left")),
-			Right: key.NewBinding(key.WithKeys(kbc.KeyBindings.Navigation.Right), key.WithHelp(kbc.KeyBindings.Navigation.Right, "Toggle to the panel on the right")),
-		},
-		Editor: command.EditorKeyMap{
-			Up:                 key.NewBinding(key.WithKeys(kbc.KeyBindings.Editor.Up), key.WithHelp(kbc.KeyBindings.Editor.Up, "move up")),
-			Down:               key.NewBinding(key.WithKeys(kbc.KeyBindings.Editor.Down), key.WithHelp(kbc.KeyBindings.Editor.Down, "move down")),
-			Left:               key.NewBinding(key.WithKeys(kbc.KeyBindings.Editor.Left), key.WithHelp(kbc.KeyBindings.Editor.Left, "move left")),
-			Right:              key.NewBinding(key.WithKeys(kbc.KeyBindings.Editor.Right), key.WithHelp(kbc.KeyBindings.Editor.Right, "move right")),
-			Insert:             key.NewBinding(key.WithKeys(kbc.KeyBindings.Editor.Insert), key.WithHelp(kbc.KeyBindings.Editor.Insert, "insert mode")),
-			Normal:             key.NewBinding(key.WithKeys(kbc.KeyBindings.Editor.Normal), key.WithHelp(kbc.KeyBindings.Editor.Normal, "normal mode")),
-			ExecuteQuery:       key.NewBinding(key.WithKeys(kbc.KeyBindings.Editor.ExecuteQuery), key.WithHelp(kbc.KeyBindings.Editor.ExecuteQuery, "execute queries in the editor")),
-			ExecuteSingleQuery: key.NewBinding(key.WithKeys(kbc.KeyBindings.Editor.ExecuteSingleQuery), key.WithHelp(kbc.KeyBindings.Editor.ExecuteSingleQuery, "execute single query")),
-		},
-	}
-
-	return &tkb, nil
+	return kbc, nil
 }
 
 // Open returns a db connection using the data from the config object.
@@ -249,46 +236,6 @@ func (c *Config) Open() (*sql.DB, error) {
 	}
 
 	return db, err
-}
-
-// MigrateInstance returns a migrate instance based on the given driver.
-func (c *Config) MigrateInstance() (*migrate.Migrate, error) {
-	db, err := c.Open()
-	if err != nil {
-		return nil, err
-	}
-
-	switch c.Driver {
-	case drivers.SQLite:
-		dbDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
-		if err != nil {
-			fmt.Printf("instance error: %v \n", err)
-			return nil, err
-		}
-
-		fileSource, err := (&file.File{}).Open("file://db/migrations")
-		if err != nil {
-			fmt.Printf("opening file error: %v \n", err)
-			return nil, err
-		}
-
-		m, err := migrate.NewWithInstance("file", fileSource, c.DBName, dbDriver)
-		if err != nil {
-			fmt.Printf("migrate error: %v \n", err)
-			return nil, err
-		}
-
-		return m, nil
-	case drivers.Postgres, drivers.MySQL, drivers.SQLServer:
-		m, err := migrate.New("file://db/migrations", c.GetDBConnStr())
-		if err != nil {
-			fmt.Printf("migrate error: %v \n", err)
-			return nil, err
-		}
-		return m, nil
-	default:
-		return nil, err
-	}
 }
 
 // Get returns a config object with the db connection data already in place.
